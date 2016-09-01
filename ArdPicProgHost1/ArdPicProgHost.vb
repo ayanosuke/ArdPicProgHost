@@ -18,6 +18,7 @@
 ' of this code to your application and usage.
 ' 
 ' Documentation of changes:
+' Fork&change: 09/01/2016 : PIC12F1288 support by aya (http://dcc.client.jp/5in1.html)
 ' Last change: 01/26/2016 : migrated source to VB 2013 and fixed a bug in detecting a device
 ' Last change: 11/02/2014 : fixed bugs in COM detection
 ' Last change: 01/11/2014 : fixed bugs in Intel hex file export (checksum calculation, format for EEPROM data)
@@ -94,7 +95,7 @@ Friend Class frmUI_ArdPicProgHost
         ' Initialize LED
         Led1.Color = LED.LEDColorSelection.LED_Green
         Led1.Interval = 500
-        
+
         If AvailableCOMPorts.Items.Count = 0 Then
             MsgBox("No COM Port found. Program will stop.", MsgBoxStyle.OkOnly, "Error Message")
             End
@@ -200,7 +201,11 @@ Friend Class frmUI_ArdPicProgHost
         Dim strDataAddress As String
         Dim intFilePointer As Integer = 0
         Dim intByteCount As Integer
-        Dim intDataAddress As Integer
+        'Dim intDataAddress As Integer
+        Dim lngDataAddress As Long
+        Dim lngExtendedSegmentAddress As Long = 0
+        Dim intData As Integer
+
         With dlgOpenFile
             .Filter = "Hexfiles (*.hex)|*.hex|All files (*.*)|*.*"
             .FilterIndex = 1
@@ -225,12 +230,15 @@ Friend Class frmUI_ArdPicProgHost
         End If
         While (strSourceFileIntelHex.Chars(intFilePointer + 8) <> "1")
             intFilePointer += 1
-            intByteCount = Val("&H" + strSourceFileIntelHex.Substring(intFilePointer, 2))
+            intByteCount = Val("&H" + strSourceFileIntelHex.Substring(intFilePointer, 2)) 'REC LEN	
             intFilePointer += 2
-            intDataAddress = Val("&H" + strSourceFileIntelHex.Substring(intFilePointer, 4)) >> 1
-            strDataAddress = Decimal2Hex(intDataAddress)
+            'System.Diagnostics.Debug.WriteLine(CLng("&H" + strSourceFileIntelHex.Substring(intFilePointer, 4)) >> 1)
+            'intDataAddress = Val("&H" + strSourceFileIntelHex.Substring(intFilePointer, 4)) >> 1
+            lngDataAddress = lngExtendedSegmentAddress + (CLng("&H" + strSourceFileIntelHex.Substring(intFilePointer, 4)) >> 1) 'LOAD OFFSET
+            'strDataAddress = Decimal2Hex(intDataAddress)
+            strDataAddress = Decimal2Hex(lngDataAddress)
             intFilePointer += 5 'move filepointer to record type
-            If strSourceFileIntelHex.Chars(intFilePointer) = "0" Then
+            If strSourceFileIntelHex.Chars(intFilePointer) = "0" Then 'RECTYPE:DATA RECODE
                 'process data
                 intFilePointer += 1
                 strWriteFileFormat = strWriteFileFormat & ":" & strDataAddress
@@ -239,8 +247,13 @@ Friend Class frmUI_ArdPicProgHost
                     intFilePointer += 4
                 Next
                 strWriteFileFormat = strWriteFileFormat & vbCrLf 'close line
-            ElseIf strSourceFileIntelHex.Chars(intFilePointer) = "4" Then
-                'process extended segment address -> not required
+            ElseIf strSourceFileIntelHex.Chars(intFilePointer) = "4" Then 'RECTYPE:extended segment address
+                intFilePointer += 1
+                intData = Val("&H" + strSourceFileIntelHex.Substring(intFilePointer, 4))
+                If intData <> 0 Then
+                    lngExtendedSegmentAddress = ((&H1 << 16) + lngDataAddress + intData) / 2 '((0x0001<<16) + LoadOffset + Data ) / 2 
+                End If
+                'System.Diagnostics.Debug.WriteLine(strDataAddress)
             End If
             ' read until start of next line
             While (strSourceFileIntelHex.Chars(intFilePointer) <> ":")
@@ -300,6 +313,7 @@ Friend Class frmUI_ArdPicProgHost
             strDataMemory = Mid(strDataMemory, 5, Len(strDataMemory) - 9) 'remove "OK" at the beginning and CRLF, ".", and CRLF at the end 
             While (intMemAdress < intDataEnd)
                 EEPROMDump.Text = EEPROMDump.Text & Decimal2Hex(intMemAdress) & ": "
+                'EEPROMDump.Text = EEPROMDump.Text & myRight(Decimal2Hex(intMemAdress), 4) & ": "
                 For i = intStartOfLine + 2 To intStartOfLine + 33 Step 5
                     EEPROMDump.Text = EEPROMDump.Text & Mid(strDataMemory, i, 3)
                 Next
@@ -316,7 +330,7 @@ Friend Class frmUI_ArdPicProgHost
         Led2.Color = LED.LEDColorSelection.LED_Green
         Led2.State = True 'make sure that LED is on
     End Sub
-        Private Sub ReadButton_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ReadButton.Click
+    Private Sub ReadButton_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ReadButton.Click
         Dim strChannelBuffer As String = ""
         If boolDeviceFound Then
             Status.Text = "Reading"
@@ -332,6 +346,15 @@ Friend Class frmUI_ArdPicProgHost
             Me.Status.Refresh()
         End If
     End Sub
+
+    Public Shared Function myRight(ByVal stTarget As String, ByVal iLength As Integer) As String
+        If iLength <= stTarget.Length Then
+            Return stTarget.Substring(stTarget.Length - iLength)
+        End If
+
+        Return stTarget
+    End Function
+
 
     Private Sub EraseButton_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles EraseButton.Click
         Dim strChannelBuffer As String = ""
@@ -378,6 +401,7 @@ Friend Class frmUI_ArdPicProgHost
                     If strCommandString <> "" Then
                         Call mySerialLink.SendDataToSerial(strCommandString)
                         Call mySerialLink.GetResponse(strChannelBuffer, "OK")
+                        'System.Diagnostics.Debug.WriteLine(strCommandString)
                         If (InStr(1, strChannelBuffer, "ERROR")) Then
                             MsgBox("Write error to device - Please erase device first!", MessageBoxButtons.OK, "ArdPigProgHost: Write Error")
                             Led2.Blink = False
